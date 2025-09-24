@@ -16,21 +16,30 @@ POSITION_MAP = {
 }
 
 def get_exif_datetime(img_path):
+    # 优先 EXIF 拍摄时间
     try:
         image = Image.open(img_path)
-        exif_data = image._getexif()
-        if not exif_data:
-            return None
-        for tag_id, value in exif_data.items():
-            tag = TAGS.get(tag_id, tag_id)
-            if tag == 'DateTimeOriginal':
-                # 格式如 '2023:09:24 12:34:56'
-                try:
-                    dt = datetime.strptime(value, '%Y:%m:%d %H:%M:%S')
-                    return dt.strftime('%Y-%m-%d')
-                except Exception:
-                    return None
-        return None
+        exif_data = getattr(image, '_getexif', lambda: None)()
+        if exif_data:
+            for tag_id, value in exif_data.items():
+                tag = TAGS.get(tag_id, tag_id)
+                if tag == 'DateTimeOriginal':
+                    try:
+                        dt = datetime.strptime(value, '%Y:%m:%d %H:%M:%S')
+                        return dt.strftime('%Y-%m-%d')
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    # 若无 EXIF，尝试用文件创建/修改时间
+    try:
+        stat = os.stat(img_path)
+        # Windows 下优先用创建时间
+        if hasattr(stat, 'st_ctime'):
+            dt = datetime.fromtimestamp(stat.st_ctime)
+        else:
+            dt = datetime.fromtimestamp(stat.st_mtime)
+        return dt.strftime('%Y-%m-%d')
     except Exception:
         return None
 
@@ -44,7 +53,10 @@ def add_watermark(img_path, output_path, text, font_size, color, position):
         font = ImageFont.load_default()
     txt_layer = Image.new('RGBA', image.size, (255,255,255,0))
     draw = ImageDraw.Draw(txt_layer)
-    text_width, text_height = draw.textsize(text, font=font)
+    # 获取文本尺寸，兼容新版 Pillow
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
     # 计算位置
     if position == 'top-left':
         x, y = 10, 10
